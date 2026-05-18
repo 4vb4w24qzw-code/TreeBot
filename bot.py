@@ -30,7 +30,7 @@ from PIL import Image
 from database import Database
 
 BOT_TOKEN  = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-GEMINI_KEY = os.getenv("GEMINI_KEY", "AIzaSyCCviLfgx38fM_GMAc2SGIeLvMwlmvG14c")
+GEMINI_KEY = os.getenv("GEMINI_KEY", "YOUR_GEMINI_KEY_HERE")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 PHASH_THRESHOLD = 10
 
@@ -113,14 +113,38 @@ async def check_tree_with_gemini(image_bytes: bytes) -> tuple:
         log.error(f"Gemini error: {e}")
         return True, "Проверка недоступна"
 
+
 @dp.message(CommandStart())
 async def cmd_start(msg: Message, state: FSMContext):
     if db.is_verified(msg.from_user.id):
-        await msg.answer("👋 Ты уже верифицирован!\n\n🌳 Отправь фото посаженного дерева в Левенцовском районе — и получи промокод на скидку в кафе.", reply_markup=remove_keyboard())
+        await msg.answer(
+            "👋 Ты уже верифицирован!\n\n🌳 Отправь фото посаженного дерева в Левенцовском районе — и получи промокод на скидку в кафе.",
+            reply_markup=remove_keyboard()
+        )
         await state.set_state(PlantStates.waiting_photo)
     else:
-        await msg.answer("🌱 <b>Привет! Это бот «Посади дерево»</b>\n\nСажай деревья в <b>Левенцовском районе</b> Ростова-на-Дону и получай скидки в кафе-партнёрах!\n\nДля начала нужно подтвердить свой номер телефона 👇", parse_mode="HTML", reply_markup=phone_keyboard())
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌱 Начать", callback_data="start_reg")]
+        ])
+        await msg.answer(
+            "🌱 <b>Привет! Это бот «Посади дерево»</b>\n\n"
+            "Сажай деревья в <b>Левенцовском районе</b> Ростова-на-Дону "
+            "и получай скидки в кафе-партнёрах!\n\n"
+            "Нажми кнопку ниже чтобы начать 👇",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
         await state.set_state(PlantStates.waiting_phone)
+
+
+@dp.callback_query(F.data == "start_reg")
+async def handle_start_button(call: CallbackQuery, state: FSMContext):
+    await call.message.answer(
+        "📱 Для регистрации поделись своим номером телефона 👇",
+        reply_markup=phone_keyboard()
+    )
+    await call.answer()
+
 
 @dp.message(PlantStates.waiting_phone, F.contact)
 async def handle_phone(msg: Message, state: FSMContext):
@@ -133,12 +157,17 @@ async def handle_phone(msg: Message, state: FSMContext):
         await msg.answer("❌ Этот номер уже зарегистрирован.", reply_markup=remove_keyboard())
         return
     db.register_user(msg.from_user.id, phone, msg.from_user.username or "")
-    await msg.answer("✅ <b>Номер подтверждён!</b>\n\n🌳 Посади дерево в <b>Левенцовском районе</b> и пришли фото — получишь промокод на скидку!", parse_mode="HTML", reply_markup=remove_keyboard())
+    await msg.answer(
+        "✅ <b>Номер подтверждён!</b>\n\n🌳 Посади дерево в <b>Левенцовском районе</b> и пришли фото — получишь промокод на скидку!",
+        parse_mode="HTML", reply_markup=remove_keyboard()
+    )
     await state.set_state(PlantStates.waiting_photo)
+
 
 @dp.message(PlantStates.waiting_phone)
 async def handle_phone_wrong(msg: Message):
     await msg.answer("👇 Нажми кнопку <b>«Поделиться номером»</b> ниже.", parse_mode="HTML", reply_markup=phone_keyboard())
+
 
 @dp.message(PlantStates.waiting_photo, F.photo)
 async def handle_photo(msg: Message, state: FSMContext):
@@ -153,31 +182,36 @@ async def handle_photo(msg: Message, state: FSMContext):
         await msg.answer("⚠️ Не удалось обработать фото. Попробуй ещё раз.")
         return
 
-    # Проверка Gemini
     await msg.answer("🌳 Проверяем наличие дерева на фото...")
     is_tree, reason = await check_tree_with_gemini(image_bytes)
     if not is_tree:
-        await msg.answer(f"❌ <b>На фото не обнаружено дерево.</b>\n\n<i>{reason}</i>\n\nОтправь фото с посаженным деревом или саженцем.", parse_mode="HTML")
+        await msg.answer(
+            f"❌ <b>На фото не обнаружено дерево.</b>\n\n<i>{reason}</i>\n\nОтправь фото с посаженным деревом или саженцем.",
+            parse_mode="HTML"
+        )
         return
 
-    # Антиплагиат
     if is_duplicate(new_hash, db.get_all_hashes()):
         await msg.answer("❌ <b>Это фото уже было загружено ранее.</b>\n\nОтправь новое уникальное фото.", parse_mode="HTML")
         return
 
-    # Лимит
     if db.get_user_promo_count(user_id) >= 5:
         await msg.answer("⚠️ Ты уже получил максимум промокодов (5). Спасибо за участие! 🌿")
         return
 
-    # Промокод
     promo = generate_promo()
     db.save_submission(user_id, new_hash, promo)
-    await msg.answer(f"🎉 <b>Дерево засчитано!</b>\n\nТвой промокод:\n\n<code>{promo}</code>\n\n📍 Покажи на кассе в кафе-партнёрах Левенцовского района.\n<i>Действует 30 дней.</i>", parse_mode="HTML")
+    await msg.answer(
+        f"🎉 <b>Дерево засчитано!</b>\n\nТвой промокод:\n\n<code>{promo}</code>\n\n"
+        f"📍 Покажи на кассе в кафе-партнёрах Левенцовского района.\n<i>Действует 30 дней.</i>",
+        parse_mode="HTML"
+    )
+
 
 @dp.message(PlantStates.waiting_photo)
 async def handle_photo_wrong(msg: Message):
     await msg.answer("📸 Отправь <b>фотографию</b> посаженного дерева.", parse_mode="HTML")
+
 
 @dp.message(Command("my_promos"))
 async def cmd_my_promos(msg: Message):
@@ -190,10 +224,15 @@ async def cmd_my_promos(msg: Message):
         lines.append(f"• <code>{promo}</code> — {created_at[:10]}")
     await msg.answer("\n".join(lines), parse_mode="HTML")
 
+
 @dp.message(Command("stats"))
 async def cmd_stats(msg: Message):
     stats = db.get_stats()
-    await msg.answer(f"📊 <b>Статистика:</b>\n\n👥 Пользователей: {stats['users']}\n📸 Фото принято: {stats['submissions']}\n🎟 Промокодов: {stats['promos']}", parse_mode="HTML")
+    await msg.answer(
+        f"📊 <b>Статистика:</b>\n\n👥 Пользователей: {stats['users']}\n📸 Фото принято: {stats['submissions']}\n🎟 Промокодов: {stats['promos']}",
+        parse_mode="HTML"
+    )
+
 
 async def main():
     db.init()
